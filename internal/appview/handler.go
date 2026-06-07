@@ -61,6 +61,7 @@ type Handler struct {
 	viewerPubkey              string
 	cache                     cache.Cache
 	cacheTTL                  time.Duration
+	cacheStaleFor             time.Duration
 	ranker                    RankedFeedProvider
 }
 
@@ -106,10 +107,11 @@ func WithNIP05Validation(enabled bool) Option {
 
 // WithResponseCache enables the shared Redis response cache for the REST
 // app-view routes. A disabled cache is a no-op.
-func WithResponseCache(c cache.Cache, defaultTTL time.Duration) Option {
+func WithResponseCache(c cache.Cache, defaultTTL, staleFor time.Duration) Option {
 	return func(h *Handler) {
 		h.cache = c
 		h.cacheTTL = defaultTTL
+		h.cacheStaleFor = staleFor
 	}
 }
 
@@ -220,7 +222,7 @@ func (h *Handler) withMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	// the underlying handler so hits still carry the standard headers.
 	handler := next
 	if h.cache != nil && h.cache.Enabled() {
-		handler = cache.WrapREST(next, h.cache, h.cacheTTL)
+		handler = cache.WrapREST(next, h.cache, h.cacheTTL, h.cacheStaleFor)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		capabilities.WriteHeaders(w)
@@ -290,7 +292,7 @@ type EnrichmentResponse struct {
 // nagg-ts client parses both transports with one schema. EndCursor is the
 // `<RFC3339Nano>|<id>` cursor of the last (oldest) row, or null when empty.
 type PageInfo struct {
-	HasNextPage bool   `json:"hasNextPage"`
+	HasNextPage bool    `json:"hasNextPage"`
 	EndCursor   *string `json:"endCursor"`
 }
 

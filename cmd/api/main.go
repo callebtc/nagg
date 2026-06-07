@@ -150,7 +150,7 @@ func main() {
 
 	responseCache := cache.New(cfg.Cache.URL, logger)
 	if responseCache.Enabled() {
-		slog.Info("response cache enabled", "default_ttl", cfg.Cache.DefaultTTL)
+		slog.Info("response cache enabled", "default_ttl", cfg.Cache.DefaultTTL, "stale_for", cfg.Cache.StaleFor)
 	}
 
 	mux := http.NewServeMux()
@@ -159,8 +159,8 @@ func main() {
 		graphqlapi.WithRequestTimeout(cfg.API.GraphQLTimeout),
 		graphqlapi.WithRelayHydrationMaxJobs(cfg.OnDemand.GraphQLMaxJobsPerRequest),
 	)
-	mux.HandleFunc("/graphql", cache.WrapGraphQL(gqlHandler, responseCache, cfg.Cache.DefaultTTL))
-	mux.HandleFunc("/v1/graphql", cache.WrapGraphQL(gqlHandler, responseCache, cfg.Cache.DefaultTTL))
+	mux.HandleFunc("/graphql", cache.WrapGraphQL(gqlHandler, responseCache, cfg.Cache.DefaultTTL, cfg.Cache.StaleFor))
+	mux.HandleFunc("/v1/graphql", cache.WrapGraphQL(gqlHandler, responseCache, cfg.Cache.DefaultTTL, cfg.Cache.StaleFor))
 	mux.HandleFunc("/graphiql", graphqlapi.GraphiQLHandler("/graphql"))
 	// Reuse the GraphQL schema options so the REST ranked-feed route runs the
 	// exact same ranking pipeline (scoring + on-demand hydration) as the
@@ -170,7 +170,7 @@ func main() {
 		appview.WithNIP05Validation(cfg.Vertex.ValidateNIP05),
 		appview.WithVertexProfileMinFollowers(cfg.Vertex.ProfileMinFollowers),
 		appview.WithViewerPubkey(cfg.Viewer.PubKey),
-		appview.WithResponseCache(responseCache, cfg.Cache.DefaultTTL),
+		appview.WithResponseCache(responseCache, cfg.Cache.DefaultTTL, cfg.Cache.StaleFor),
 		appview.WithRankedFeed(ranker),
 	}
 	if vertexClient != nil {

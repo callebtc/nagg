@@ -47,6 +47,11 @@ type APIConfig struct {
 type CacheConfig struct {
 	URL        string
 	DefaultTTL time.Duration
+	// StaleFor is how long past a key's fresh TTL a cached response may still be
+	// served while it is revalidated in the background (stale-while-revalidate).
+	// A non-positive value disables stale serving, making every expiry a full
+	// recompute.
+	StaleFor time.Duration
 }
 
 type VertexConfig struct {
@@ -149,6 +154,7 @@ func Load() (Config, error) {
 		Cache: CacheConfig{
 			URL:        strings.TrimSpace(os.Getenv("NAGG_REDIS_URL")),
 			DefaultTTL: parseDuration(env("NAGG_CACHE_DEFAULT_TTL", "30s")),
+			StaleFor:   parseDuration(env("NAGG_CACHE_STALE_FOR", "5m")),
 		},
 		RunIngester: parseBool(env("NAGG_RUN_INGESTER", "true")),
 		RunEnricher: parseBool(env("NAGG_RUN_ENRICHER", "true")),

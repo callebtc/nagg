@@ -11,7 +11,9 @@ import (
 )
 
 // keyVersion lets us evolve the key format independently of the schema version.
-const keyVersion = "v1"
+// v2 introduced the stale-while-revalidate value envelope (timestamp-prefixed
+// body); the bump retires the older plain-body entries with a clean all-miss.
+const keyVersion = "v2"
 
 // schemaPrefix embeds the GraphQL schema version so a schema bump automatically
 // invalidates every cached entry (a new prefix yields all-misses).
