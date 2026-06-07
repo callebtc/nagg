@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,10 +24,13 @@ type Client struct {
 	ReadLimit       int64
 	DialTimeout     time.Duration
 	ReadIdleTimeout time.Duration
+	// Health, when set, circuit-breaks relays that recently failed so a dead
+	// relay is not re-dialed on every request. A nil Health disables breaking.
+	Health *RelayHealth
 }
 
 func (c Client) Query(ctx context.Context, filter map[string]any, timeout time.Duration) ([]Event, error) {
-	relays := uniqueRelays(c.Relays)
+	relays := c.healthyRelays(uniqueRelays(c.Relays))
 	if len(relays) == 0 {
 		return nil, nil
 	}
@@ -40,30 +42,50 @@ func (c Client) Query(ctx context.Context, filter map[string]any, timeout time.D
 	defer cancel()
 
 	subID := fmt.Sprintf("nagg-demand-%d", time.Now().UnixNano())
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var out []Event
-	var errs []error
 
+	type relayResult struct {
+		relay  string
+		events []Event
+		err    error
+	}
+	// Buffered to len(relays) so a straggler goroutine never blocks on send after
+	// we have already returned on timeout; it drains here and exits.
+	results := make(chan relayResult, len(relays))
 	for _, relay := range relays {
 		relay := relay
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			events, err := c.queryRelay(qctx, relay, subID, filter)
-			mu.Lock()
-			defer mu.Unlock()
-			out = append(out, events...)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", relay, err))
-				slog.Warn("on-demand relay query failed", "relay", relay, "error", err)
-			} else if len(events) > 0 {
-				slog.Info("on-demand relay query returned events", "relay", relay, "events", len(events))
-			}
+			results <- relayResult{relay: relay, events: events, err: err}
 		}()
 	}
-	wg.Wait()
 
+	var out []Event
+	var errs []error
+	for done := 0; done < len(relays); {
+		select {
+		case res := <-results:
+			done++
+			if res.err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", res.relay, res.err))
+				c.Health.recordFailure(res.relay, time.Now())
+				slog.Warn("on-demand relay query failed", "relay", res.relay, "error", res.err)
+				continue
+			}
+			c.Health.recordSuccess(res.relay)
+			out = append(out, res.events...)
+			if len(res.events) > 0 {
+				slog.Info("on-demand relay query returned events", "relay", res.relay, "events", len(res.events))
+			}
+		case <-qctx.Done():
+			// The deadline elapsed: stop waiting on the remaining relays (usually
+			// the slow or dead ones) and return what the responsive relays gave.
+			return finishQuery(out, errs)
+		}
+	}
+	return finishQuery(out, errs)
+}
+
+func finishQuery(out []Event, errs []error) ([]Event, error) {
 	if len(out) > 0 {
 		return out, nil
 	}
@@ -71,6 +93,26 @@ func (c Client) Query(ctx context.Context, filter map[string]any, timeout time.D
 		return nil, errors.Join(errs...)
 	}
 	return nil, nil
+}
+
+// healthyRelays drops relays currently in circuit-breaker backoff. If every
+// relay is backed off (e.g. a transient network outage tripped them all), it
+// probes the full set so the breaker can recover instead of going dark.
+func (c Client) healthyRelays(relays []string) []string {
+	if c.Health == nil || len(relays) == 0 {
+		return relays
+	}
+	now := time.Now()
+	out := make([]string, 0, len(relays))
+	for _, relay := range relays {
+		if c.Health.available(relay, now) {
+			out = append(out, relay)
+		}
+	}
+	if len(out) == 0 {
+		return relays
+	}
+	return out
 }
 
 func (c Client) queryRelay(ctx context.Context, relay string, subID string, filter map[string]any) ([]Event, error) {

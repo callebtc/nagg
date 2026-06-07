@@ -157,6 +157,7 @@ func NewRelayUserFeedBackfiller(store eventInserter, cfg UserFeedBackfillConfig)
 		query: relayquery.Client{
 			Relays:    cfg.Relays,
 			ReadLimit: cfg.ReadLimit,
+			Health:    relayquery.NewRelayHealth(),
 		},
 		cfg:      cfg,
 		attempts: map[string]time.Time{},
